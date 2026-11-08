@@ -129,6 +129,23 @@ input[type=range]{width:120px}
   </div>
 
   <div class="card">
+    <h2>参数实验台 <small>拖动权重或阈值，实时重算价值分、排序与机会率（默认值与正文一致）</small></h2>
+    <div id="labWeights"></div>
+    <div class="slider" style="margin-top:10px">
+      <label>判别阈值 τ</label>
+      <input type="range" id="labTau" min="0.30" max="0.95" step="0.01">
+      <span id="labTauVal"></span>
+    </div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin:12px 0 6px;color:var(--muted)">
+      <span>机会数 <b id="labOpp" style="color:var(--navy)">—</b></span>
+      <span>机会率 <b id="labRate" style="color:var(--navy)">—</b></span>
+      <span>最高价值簇 <b id="labTop" style="color:var(--navy)">—</b></span>
+      <button class="ghost" id="labReset" style="padding:4px 10px">恢复默认</button>
+    </div>
+    <div id="labTable"></div>
+  </div>
+
+  <div class="card">
     <h2>核心公式与模型 <small>判别、赋权与评分的口径与正文一致（以主批次 B01 标定）</small></h2>
     <div class="formulas"><div class="f"><b>① 证据合成</b><code>p = σ(β₀ + Σ βₖ xₖ)</code><span class="wt">ŷ = 1[p ≥ τ]，τ = 0.63；证据 21 维（生产 19 维）</span></div><div class="f"><b>② 熵权</b><code>eⱼ = −(1/ln m) Σᵢ pᵢⱼ ln pᵢⱼ</code><span class="wt">wᴱⱼ = (1−eⱼ) / Σₖ(1−eₖ)</span></div><div class="f"><b>③ 组合赋权</b><code>w = α₁·wᴱ + α₂·wᴬ</code><span class="wt">α₁ = 0.55、α₂ = 0.45，AHP 一致性 CR = 0.013</span></div><div class="f"><b>④ 价值分</b><code>Sₘ = Σⱼ wⱼ Dₘⱼ</code><span class="wt">权重：多源指向 5.5%；记录规模 17.1%；互动热度 20.9%；商业信号 14.2%；需求强度 24.6%；落地可行性 17.6%</span></div><div class="f"><b>⑤ 语义聚类</b><code>cos(z, z′) = z·z′ / (‖z‖·‖z′‖)</code><span class="wt">512 维 → PCA 40 维 → k = 5</span></div><div class="f"><b>⑥ 去重</b><code>J(A, B) = |A∩B| / |A∪B|</code><span class="wt">MinHash-LSH 生成候选，J ≥ 0.82 判重</span></div></div>
   </div>
@@ -399,6 +416,61 @@ function exportPlan(clusterId){
 }
 
 init();
+</script>
+
+<script>
+(function(){
+  const NAMES = {"D1_多源指向度":"多源指向","D2_记录规模":"记录规模","D3_互动热度":"互动热度",
+                 "D4_商业信号":"商业信号","D5_需求强度":"需求强度","D6_落地可行性":"落地可行性"};
+  function curData(){
+    const b = (typeof state !== "undefined") ? state.batch : DATA.batches[0];
+    return DATA.data[b];
+  }
+  function render(){
+    const d = curData();
+    const w = Object.assign({}, d.params.weights);
+    const box = document.getElementById("labWeights");
+    box.innerHTML = "";
+    Object.keys(w).forEach(k=>{
+      const row = document.createElement("div");
+      row.className = "slider";
+      row.innerHTML = `<label>${NAMES[k]||k}</label>
+        <input type="range" min="0" max="0.4" step="0.005" value="${w[k].toFixed(3)}" data-k="${k}">
+        <span>${(w[k]*100).toFixed(1)}%</span>`;
+      box.appendChild(row);
+    });
+    box.querySelectorAll("input").forEach(el=>{
+      el.addEventListener("input", ()=>{ w[el.dataset.k] = parseFloat(el.value);
+        el.nextElementSibling.textContent = (el.value*100).toFixed(1)+"%"; calc(w); });
+    });
+    const tau = document.getElementById("labTau");
+    tau.value = d.params.tau;
+    document.getElementById("labTauVal").textContent = Number(d.params.tau).toFixed(2);
+    tau.oninput = ()=>{ document.getElementById("labTauVal").textContent = Number(tau.value).toFixed(2); calc(w); };
+    document.getElementById("labReset").onclick = ()=>{ render(); calc(Object.assign({}, d.params.weights)); };
+    calc(w);
+  }
+  function calc(w){
+    const d = curData();
+    const tot = Object.values(w).reduce((a,b)=>a+Math.max(b,0),0) || 1;
+    const rows = d.clusters.map(c=>{
+      let s = 0;
+      Object.keys(w).forEach(k=>{ s += (Math.max(w[k],0)/tot) * (c.dims[k]||0); });
+      return {name:c.name, score:s, n:c.n};
+    }).sort((a,b)=>b.score-a.score);
+    document.getElementById("labTable").innerHTML =
+      "<table><thead><tr><th>名次</th><th>主题簇</th><th>重算价值分</th></tr></thead><tbody>"
+      + rows.map((r,i)=>`<tr><td>#${i+1}</td><td>${r.name}</td><td>${r.score.toFixed(1)}</td></tr>`).join("")
+      + "</tbody></table>";
+    const tau = parseFloat(document.getElementById("labTau").value);
+    const opp = d.records.filter(r=>r.c >= tau).length;
+    document.getElementById("labOpp").textContent = opp;
+    document.getElementById("labRate").textContent = (100*opp/d.records.length).toFixed(1)+"%";
+    document.getElementById("labTop").textContent = rows[0] ? rows[0].name : "—";
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", render);
+  else setTimeout(render, 300);
+})();
 </script>
 </body>
 </html>
